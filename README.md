@@ -10,12 +10,12 @@ Build your casebender Box Refer to the official Documentation of Casebender
 https://docs.casebender.com/en/quickstart
 
 Generate API for Super User
+```
+![image](https://github.com/user-attachments/assets/ffa85c2d-b14e-4672-9859-882c9cd9da25)
 
-![image](https://github.com/user-attachments/assets/066eb5e7-aed3-4cfd-bf96-3bf3fead3d3d)
+```
 
 Copy your API Key and API Secret and Store Safe
-
-
 
 ```
 
