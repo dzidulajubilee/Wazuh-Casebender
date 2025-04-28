@@ -38,9 +38,7 @@ cp  custom-casebender.py/var/ossec/integrations/
 
 nano custom-casebender.py
 
-Replace the section with your API secret and save the file
-
-![image](https://github.com/user-attachments/assets/ad99eed6-46e8-4b7c-a588-ceac08fd81ba)
+Replace the section HARDCODED_API_SECRET with your API secret and save the file
 
 
 ```
