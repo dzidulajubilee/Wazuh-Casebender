@@ -24,7 +24,7 @@ Copy your API Key and API Secret and Store Safe
 On your Wazuh Server, Clone this repo on your wazuh server
 
 ```
-git clone https://github.com/dzidulajubilee/
+git clone https://github.com/dzidulajubilee/Wazuh-Casebender.git
 ```
 
 # STEP 3  - Navigate into the cloned repo and copy the necessary files into Wazuh's Integration Directory 
