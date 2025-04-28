@@ -78,25 +78,26 @@ def generate_casebender_payload(alert):
     rule_id = alert.get('rule', {}).get('id', 'unknown')
     rule_description = alert.get('rule', {}).get('description', 'No description available')
     groups = ", ".join(alert.get('rule', {}).get('groups', [])) if 'groups' in alert.get('rule', {}) else "unknown"
+    full_log = alert.get('full_log', 'No full_log available.')
 
     # Agent information
     agent_info = f"""Agent Information:
-- Name: {agent_name}
-- IP: {agent_ip}
-- ID: {agent_id}
+- **Name**: {agent_name}
+- **IP**: {agent_ip}
+- **ID**: {agent_id}
 """
 
     # Alert metadata
     alert_metadata = f"""Alert Metadata:
-- Rule ID: {rule_id}
-- Rule Description: {rule_description}
-- Severity Level: {level}
-- Timestamp: {timestamp}
-- Groups: {groups}
+- **Rule ID**: {rule_id}
+- **Rule Description**: {rule_description}
+- **Severity Level**: {level}
+- **Timestamp**: {timestamp}
+- **Groups**: {groups}
 """
 
-    # Data section with improved formatting
-    data_info = "Data:\n"
+    # Data section
+    data_info = "**Data**:\n"
     if 'data' in alert:
         try:
             win_data = alert['data'].get('win', {})
@@ -127,8 +128,14 @@ def generate_casebender_payload(alert):
     else:
         data_info += "  - No data field found in alert.\n"
 
+    # Full Log section (NEW)
+    full_log_info = f"""
+**Full Log**:
+{full_log}
+"""
+
     # Final description
-    description = f"{agent_info}\n{alert_metadata}\n{data_info}"
+    description = f"{agent_info}\n{alert_metadata}\n{data_info}\n{full_log_info}"
 
     payload = {
         "description": description,
