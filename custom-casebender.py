@@ -36,14 +36,8 @@ def main(args):
 
     payload = generate_casebender_payload(alert)
 
-    # Determine endpoint based on alert level
-    level = alert['rule']['level']
-    if level <= 9:
-        endpoint = "/api/alerts"
-        action_type = "alert"
-    else:
-        endpoint = "/api/cases"
-        action_type = "case"
+    endpoint = "/api/alerts"  # Always send to alerts, never cases
+    action_type = "alert"
 
     full_url = base_url.rstrip("/") + endpoint
 
@@ -63,13 +57,19 @@ def load_alert(filepath):
 def generate_casebender_payload(alert):
     level = alert['rule']['level']
 
-    # Map Wazuh "level" to CaseBender severity
+    # Map Wazuh "level" to CaseBender severity and TLP
     if level <= 4:
         severity = 1  # Low
-    elif 5 <= level <= 7:
+        tlp = "1"
+    elif 5 <= level <= 9:
         severity = 2  # Medium
-    else:
+        tlp = "2"
+    elif 10 <= level <= 14:
         severity = 3  # High
+        tlp = "3"
+    else:
+        severity = 4  # Critical
+        tlp = "4"
 
     agent_name = alert.get('agent', {}).get('name', 'unknown')
     agent_ip = alert.get('agent', {}).get('ip', 'unknown')
@@ -95,7 +95,7 @@ def generate_casebender_payload(alert):
 - Groups: {groups}
 """
 
-    # Data section
+    # Data section with improved formatting
     data_info = "Data:\n"
     if 'data' in alert:
         try:
@@ -107,23 +107,25 @@ def generate_casebender_payload(alert):
                 eventdata = win_data.get('eventdata', {})
 
                 if system_data:
-                    data_info += "\nSystem:\n"
-                    for key, value in system_data.items():
-                        data_info += f"- {key}: {value}\n"
+                    data_info += "\n  System Information:\n"
+                    sorted_system_data = sorted(system_data.items())
+                    for key, value in sorted_system_data:
+                        data_info += f"    - {key}: {value}\n"
                 else:
-                    data_info += "- No system information available.\n"
+                    data_info += "  - No system information available.\n"
 
                 if eventdata:
-                    data_info += "\nEvent Data:\n"
-                    for key, value in eventdata.items():
-                        data_info += f"- {key}: {value}\n"
+                    data_info += "\n  Event Data:\n"
+                    sorted_event_data = sorted(eventdata.items())
+                    for key, value in sorted_event_data:
+                        data_info += f"    - {key}: {value}\n"
                 else:
-                    data_info += "- No event data available.\n"
+                    data_info += "  - No event data available.\n"
 
         except Exception as e:
             data_info += f"- Failed to parse 'data' field: {e}\n"
     else:
-        data_info += "- No data field found in alert.\n"
+        data_info += "  - No data field found in alert.\n"
 
     # Final description
     description = f"{agent_info}\n{alert_metadata}\n{data_info}"
@@ -134,6 +136,7 @@ def generate_casebender_payload(alert):
         "title": rule_description or 'Wazuh Alert',
         "statusValue": "new",
         "severity": severity,
+        "tlp": tlp
     }
     return payload
 
@@ -150,7 +153,7 @@ def send_to_casebender(url, api_key, api_secret, payload):
         print(response.text)
         return response.status_code in (200, 201, 400, 401, 403, 500)
     except Exception as e:
-        print(f"Failed to send alert/case: {e}")
+        print(f"Failed to send alert: {e}")
         return False
 
 def log_action(alert, action_type, success):
