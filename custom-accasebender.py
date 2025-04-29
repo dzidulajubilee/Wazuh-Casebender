@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import datetime
+import time
 
 try:
     import requests
@@ -16,7 +17,7 @@ ALERT_INDEX = 1
 API_KEY_INDEX = 2
 BASE_URL_INDEX = 3
 
-# Hardcoded secret
+# Hardcoded secret (consider moving this to a config or environment variable)
 HARDCODED_API_SECRET = "a01150b70f1482f1ac3bab6513e7e5f329c43e723c580eac003d05f8762895e7"
 
 # Log file path
@@ -36,12 +37,10 @@ def main(args):
     severity = get_severity(alert)
 
     if severity > 2:
-        # Send as a case
         payload = generate_case_payload(alert)
         endpoint = "/api/cases"
         action_type = "case"
     else:
-        # Send as an alert
         payload = generate_alert_payload(alert)
         endpoint = "/api/alerts"
         action_type = "alert"
@@ -59,7 +58,11 @@ def load_alert(filepath):
         sys.exit(3)
 
 def get_severity(alert):
-    level = alert['rule']['level']
+    try:
+        level = int(alert.get('rule', {}).get('level', 0))
+    except (ValueError, TypeError):
+        level = 0
+
     if level <= 4:
         return 1  # Low
     elif 5 <= level <= 9:
@@ -70,14 +73,17 @@ def get_severity(alert):
         return 4  # Critical
 
 def build_description(alert):
-    level = alert['rule']['level']
-    agent_name = alert.get('agent', {}).get('name', 'unknown')
-    agent_ip = alert.get('agent', {}).get('ip', 'unknown')
-    agent_id = alert.get('agent', {}).get('id', 'unknown')
+    rule = alert.get('rule', {})
+    agent = alert.get('agent', {})
+
+    level = rule.get('level', 'unknown')
+    agent_name = agent.get('name', 'unknown')
+    agent_ip = agent.get('ip', 'unknown')
+    agent_id = agent.get('id', 'unknown')
     timestamp = alert.get('timestamp', 'unknown')
-    rule_id = alert.get('rule', {}).get('id', 'unknown')
-    rule_description = alert.get('rule', {}).get('description', 'No description available')
-    groups = ", ".join(alert.get('rule', {}).get('groups', [])) if 'groups' in alert.get('rule', {}) else "unknown"
+    rule_id = rule.get('id', 'unknown')
+    rule_description = rule.get('description', 'No description available')
+    groups = ", ".join(rule.get('groups', [])) if rule.get('groups') else "unknown"
     full_log = alert.get('full_log', 'No full_log available.')
 
     agent_info = f"""Agent Information:
@@ -95,33 +101,30 @@ def build_description(alert):
 """
 
     data_info = "**Data**:\n"
-    if 'data' in alert:
-        try:
-            win_data = alert['data'].get('win', {})
-            if not win_data:
-                data_info += "- No 'win' section found under 'data'\n"
+    try:
+        win_data = alert.get('data', {}).get('win', {})
+        if not win_data:
+            data_info += "- No 'win' section found under 'data'\n"
+        else:
+            system_data = win_data.get('system', {})
+            eventdata = win_data.get('eventdata', {})
+
+            if system_data:
+                data_info += "\n  System Information:\n"
+                for key, value in sorted(system_data.items()):
+                    data_info += f"    - {key}: {value}\n"
             else:
-                system_data = win_data.get('system', {})
-                eventdata = win_data.get('eventdata', {})
+                data_info += "  - No system information available.\n"
 
-                if system_data:
-                    data_info += "\n  System Information:\n"
-                    for key, value in sorted(system_data.items()):
-                        data_info += f"    - {key}: {value}\n"
-                else:
-                    data_info += "  - No system information available.\n"
+            if eventdata:
+                data_info += "\n  Event Data:\n"
+                for key, value in sorted(eventdata.items()):
+                    data_info += f"    - {key}: {value}\n"
+            else:
+                data_info += "  - No event data available.\n"
 
-                if eventdata:
-                    data_info += "\n  Event Data:\n"
-                    for key, value in sorted(eventdata.items()):
-                        data_info += f"    - {key}: {value}\n"
-                else:
-                    data_info += "  - No event data available.\n"
-
-        except Exception as e:
-            data_info += f"- Failed to parse 'data' field: {e}\n"
-    else:
-        data_info += "  - No data field found in alert.\n"
+    except Exception as e:
+        data_info += f"- Failed to parse 'data' field: {e}\n"
 
     full_log_info = f"""
 **Full Log**:
@@ -155,27 +158,40 @@ def generate_alert_payload(alert):
         "tlp": severity
     }
 
-def send_to_casebender(url, api_key, api_secret, payload):
+def send_to_casebender(url, api_key, api_secret, payload, max_retries=3):
     headers = {
         "X-Api-Key": api_key,
         "X-Api-Secret": api_secret,
         "Content-Type": "application/json",
     }
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        print(f"Sent to {url}")
-        print(f"Response status code: {response.status_code}")
-        print(response.text)
-        return response.status_code in (200, 201, 400, 401, 403, 500)
-    except Exception as e:
-        print(f"Failed to send: {e}")
-        return False
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
+            print(f"[Attempt {attempt}] Sent to {url}")
+            print(f"Status: {response.status_code} | Response: {response.text}")
+
+            if response.status_code in (200, 201):
+                return True  # Success
+            elif 500 <= response.status_code < 600:
+                print("Server error, will retry...")
+            else:
+                print("Client error or unexpected response, not retrying.")
+                return False
+        except requests.RequestException as e:
+            print(f"Request failed: {e}. Retrying...")
+
+        time.sleep(2 ** attempt)  # Exponential backoff: 2s, 4s, 8s
+
+    print("Max retries reached. Giving up.")
+    return False
 
 def log_action(alert, action_type, success):
     timestamp = datetime.datetime.utcnow().isoformat()
-    rule_id = alert['rule'].get('id', 'unknown')
-    level = alert['rule'].get('level', 'unknown')
-    title = alert['rule'].get('description', 'No title')
+    rule = alert.get('rule', {})
+    rule_id = rule.get('id', 'unknown')
+    level = rule.get('level', 'unknown')
+    title = rule.get('description', 'No title')
     status = "SUCCESS" if success else "FAILED"
 
     log_entry = f"[{timestamp}] {status} sending {action_type.upper()} | Rule ID: {rule_id} | Level: {level} | Title: {title}\n"
