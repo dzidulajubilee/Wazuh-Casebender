@@ -56,7 +56,7 @@ chown root:wazuh /var/ossec/integrations/custom-casebender.py
 
 # STEP5 - Final integration step - enabling the integration in the Wazuh manager configuration file  <br>
 
-Modify `/var/ossec/etc/ossec.conf` and insert the below code. You will need to insert the IP address for your The Hive server inside the `<hook_url>` tags as well as insert your API key inside the `<api_key>` tags. 
+Modify `/var/ossec/etc/ossec.conf` and insert the below code. You will need to insert the IP address and port for your Casebender server inside the `<hook_url>` tags as well as insert your API key inside the `<api_key>` tags. 
 
 Place Below the Global Tag
 
@@ -75,7 +75,7 @@ Once complete, you need to restart Wazuh Manager:
 
 `sudo systemctl restart wazuh-manager`
 
-You should see alerts being generated under the `Alerts` and `Cases` being created in the respective tab in TheHive Instance.
+You should see alerts being generated under the `Alerts` and `Cases` being created in the respective tab in the Casebender Instance.
 
 
 
