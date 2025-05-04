@@ -1,9 +1,12 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import json
 import os
 import sys
 import datetime
+import time
+import logging
+import re
 
 try:
     import requests
@@ -16,11 +19,11 @@ ALERT_INDEX = 1
 API_KEY_INDEX = 2
 BASE_URL_INDEX = 3
 
-# Hardcoded secret
 HARDCODED_API_SECRET = "a01150b70f1482f1ac3bab6513e7e5f329c43e723c580eac003d05f8762895e7"
 
-# Log file path
+# Logging
 LOG_FILE = "/var/ossec/logs/casebender_integration.log"
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='[%(asctime)s] %(message)s')
 
 def main(args):
     if len(args) < 4:
@@ -33,17 +36,19 @@ def main(args):
     api_secret = HARDCODED_API_SECRET
 
     alert = load_alert(alert_file)
+    severity = get_severity(alert)
 
-    payload = generate_casebender_payload(alert)
-
-    endpoint = "/api/alerts"  # Always send to alerts, never cases
-    action_type = "alert"
+    if severity > 2:
+        payload = generate_case_payload(alert)
+        endpoint = "/api/cases"
+        action_type = "case"
+    else:
+        payload = generate_alert_payload(alert)
+        endpoint = "/api/alerts"
+        action_type = "alert"
 
     full_url = base_url.rstrip("/") + endpoint
-
     success = send_to_casebender(full_url, api_key, api_secret, payload)
-
-    # Write to log file
     log_action(alert, action_type, success)
 
 def load_alert(filepath):
@@ -51,133 +56,190 @@ def load_alert(filepath):
         with open(filepath, 'r') as f:
             return json.load(f)
     except Exception as e:
-        print(f"Error reading alert file: {e}")
+        logging.error(f"Error reading alert file: {e}")
         sys.exit(3)
 
-def generate_casebender_payload(alert):
-    level = alert['rule']['level']
+def get_field(obj, path, default="unknown"):
+    for part in path.split('.'):
+        if isinstance(obj, dict):
+            obj = obj.get(part, default)
+        else:
+            return default
+    return obj if obj is not None else default
 
-    # Map Wazuh "level" to CaseBender severity and TLP
+def get_severity(alert):
+    try:
+        level = int(get_field(alert, 'rule.level', 0))
+    except (ValueError, TypeError):
+        level = 0
+
     if level <= 4:
-        severity = 1  # Low
-        tlp = "1"
+        return 1
     elif 5 <= level <= 9:
-        severity = 2  # Medium
-        tlp = "2"
+        return 2
     elif 10 <= level <= 14:
-        severity = 3  # High
-        tlp = "3"
+        return 3
     else:
-        severity = 4  # Critical
-        tlp = "4"
+        return 4
 
-    agent_name = alert.get('agent', {}).get('name', 'unknown')
-    agent_ip = alert.get('agent', {}).get('ip', 'unknown')
-    agent_id = alert.get('agent', {}).get('id', 'unknown')
-    timestamp = alert.get('timestamp', 'unknown')
-    rule_id = alert.get('rule', {}).get('id', 'unknown')
-    rule_description = alert.get('rule', {}).get('description', 'No description available')
-    groups = ", ".join(alert.get('rule', {}).get('groups', [])) if 'groups' in alert.get('rule', {}) else "unknown"
-    full_log = alert.get('full_log', 'No full_log available.')
+def build_description(alert):
+    description_lines = []
 
-    # Agent information
-    agent_info = f"""Agent Information:
-- **Name**: {agent_name}
-- **IP**: {agent_ip}
-- **ID**: {agent_id}
-"""
+    def safe_line(label, value):
+        return f"- **{label}**: {value if value is not None else 'unknown'}"
 
-    # Alert metadata
-    alert_metadata = f"""Alert Metadata:
-- **Rule ID**: {rule_id}
-- **Rule Description**: {rule_description}
-- **Severity Level**: {level}
-- **Timestamp**: {timestamp}
-- **Groups**: {groups}
-"""
+    description_lines.append("**Agent Information:**")
+    description_lines.append(safe_line("Name", get_field(alert, "agent.name")))
+    description_lines.append(safe_line("IP", get_field(alert, "agent.ip")))
+    description_lines.append(safe_line("ID", get_field(alert, "agent.id")))
 
-    # Data section
-    data_info = "**Data**:\n"
-    if 'data' in alert:
-        try:
-            win_data = alert['data'].get('win', {})
-            if not win_data:
-                data_info += "- No 'win' section found under 'data'\n"
+    description_lines.append("\n**Alert Metadata:**")
+    description_lines.append(safe_line("Rule ID", get_field(alert, "rule.id")))
+    description_lines.append(safe_line("Description", get_field(alert, "rule.description")))
+    description_lines.append(safe_line("Severity", get_field(alert, "rule.level")))
+    description_lines.append(safe_line("Timestamp", get_field(alert, "timestamp")))
+    groups = get_field(alert, "rule.groups", [])
+    description_lines.append(safe_line("Groups", ", ".join(groups) if isinstance(groups, list) else groups))
+
+    description_lines.append("\n**Full Log:**")
+    description_lines.append(get_field(alert, "full_log", "No full_log available."))
+
+    standard_keys = {
+        "agent", "rule", "full_log", "timestamp", "manager", "decoder", "location", "syscheck", "@timestamp"
+    }
+
+    def flatten(d, parent_key='', sep='.'):
+        items = []
+        for k, v in d.items():
+            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+            if isinstance(v, dict):
+                items.extend(flatten(v, new_key, sep=sep))
             else:
-                system_data = win_data.get('system', {})
-                eventdata = win_data.get('eventdata', {})
+                items.append((new_key, v))
+        return items
 
-                if system_data:
-                    data_info += "\n  System Information:\n"
-                    sorted_system_data = sorted(system_data.items())
-                    for key, value in sorted_system_data:
-                        data_info += f"    - {key}: {value}\n"
-                else:
-                    data_info += "  - No system information available.\n"
+    additional_data = flatten(alert)
+    additional_data_filtered = [(k, v) for k, v in additional_data if k.split('.')[0] not in standard_keys]
 
-                if eventdata:
-                    data_info += "\n  Event Data:\n"
-                    sorted_event_data = sorted(eventdata.items())
-                    for key, value in sorted_event_data:
-                        data_info += f"    - {key}: {value}\n"
-                else:
-                    data_info += "  - No event data available.\n"
+    if additional_data_filtered:
+        description_lines.append("\n**Additional Data:**")
+        for key, value in additional_data_filtered:
+            if isinstance(value, (str, int, float, bool)):
+                description_lines.append(safe_line(key, value))
 
-        except Exception as e:
-            data_info += f"- Failed to parse 'data' field: {e}\n"
-    else:
-        data_info += "  - No data field found in alert.\n"
+    return "\n".join(description_lines)
 
-    # Full Log section (NEW)
-    full_log_info = f"""
-**Full Log**:
-{full_log}
-"""
+def extract_observables(alert):
+    observables = []
+    seen = set()
 
-    # Final description
-    description = f"{agent_info}\n{alert_metadata}\n{data_info}\n{full_log_info}"
+    def add_observable(dataType, data, attachment=""):
+        key = (dataType, data)
+        if key not in seen:
+            observables.append({
+                "dataType": dataType,
+                "data": data,
+                "attachment": attachment
+            })
+            seen.add(key)
 
-    payload = {
-        "description": description,
+    for field in ["agent.ip", "srcip", "dstip"]:
+        ip = get_field(alert, field, None)
+        if ip and re.match(r'^\d{1,3}(\.\d{1,3}){3}$', ip):
+            add_observable("ip", ip)
+
+    syscheck_path = get_field(alert, "syscheck.path", None)
+    if syscheck_path:
+        add_observable("file", syscheck_path)
+
+    def search(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if isinstance(v, (dict, list)):
+                    search(v)
+                elif isinstance(v, str):
+                    if "hash" in k.lower() and re.fullmatch(r'\b[a-fA-F0-9]{32,64}\b', v):
+                        add_observable("hash", v)
+                    elif re.fullmatch(r'\d{1,3}(\.\d{1,3}){3}', v):
+                        add_observable("ip", v)
+                    elif re.fullmatch(r'([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}', v) and not v.startswith("http"):
+                        add_observable("domain", v)
+                    elif re.match(r'^https?://', v):
+                        add_observable("url", v)
+                    elif re.fullmatch(r'[\w\.-]+@[\w\.-]+\.\w+', v):
+                        add_observable("email", v)
+        elif isinstance(obj, list):
+            for item in obj:
+                search(item)
+
+    search(alert)
+    return observables
+
+def generate_case_payload(alert):
+    severity = get_severity(alert)
+    title = get_field(alert, "rule.description", "Wazuh Alert")
+
+    return {
+        "title": title,
+        "description": build_description(alert),
+        "severity": severity,
+        "statusValue": "new",
+        "tlp": severity,
+        "pap": severity,
+        "observables": extract_observables(alert)
+    }
+
+def generate_alert_payload(alert):
+    severity = get_severity(alert)
+    title = get_field(alert, "rule.description", "Wazuh Alert")
+
+    return {
+        "description": build_description(alert),
         "count": 1,
-        "title": rule_description or 'Wazuh Alert',
+        "title": title,
         "statusValue": "new",
         "severity": severity,
-        "tlp": tlp
+        "tlp": severity,
+        "observables": extract_observables(alert)
     }
-    return payload
 
-def send_to_casebender(url, api_key, api_secret, payload):
+def send_to_casebender(url, api_key, api_secret, payload, max_retries=3):
     headers = {
         "X-Api-Key": api_key,
         "X-Api-Secret": api_secret,
         "Content-Type": "application/json",
     }
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        print(f"Sent to {url}")
-        print(f"Response status code: {response.status_code}")
-        print(response.text)
-        return response.status_code in (200, 201, 400, 401, 403, 500)
-    except Exception as e:
-        print(f"Failed to send alert: {e}")
-        return False
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
+            logging.info(f"[Attempt {attempt}] Sent to {url}")
+            logging.info(f"Status: {response.status_code} | Response: {response.text}")
+
+            if response.status_code in (200, 201):
+                return True
+            elif 500 <= response.status_code < 600:
+                logging.warning("Server error, retrying...")
+            else:
+                logging.error("Client error or unexpected response, not retrying.")
+                return False
+        except requests.RequestException as e:
+            logging.error(f"Request failed: {e}. Retrying...")
+
+        time.sleep(2 ** attempt)
+
+    logging.error("Max retries reached. Giving up.")
+    return False
 
 def log_action(alert, action_type, success):
     timestamp = datetime.datetime.utcnow().isoformat()
-    rule_id = alert['rule'].get('id', 'unknown')
-    level = alert['rule'].get('level', 'unknown')
-    title = alert['rule'].get('description', 'No title')
-
+    rule_id = get_field(alert, "rule.id", "unknown")
+    level = get_field(alert, "rule.level", "unknown")
+    title = get_field(alert, "rule.description", "No title")
     status = "SUCCESS" if success else "FAILED"
 
-    log_entry = f"[{timestamp}] {status} sending {action_type.upper()} | Rule ID: {rule_id} | Level: {level} | Title: {title}\n"
-
-    try:
-        with open(LOG_FILE, 'a') as f:
-            f.write(log_entry)
-    except Exception as e:
-        print(f"Error writing log file: {e}")
+    log_entry = f"{status} sending {action_type.upper()} | Rule ID: {rule_id} | Level: {level} | Title: {title}"
+    logging.info(log_entry)
 
 if __name__ == "__main__":
     main(sys.argv)
