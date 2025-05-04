@@ -1,10 +1,11 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import json
 import os
 import sys
 import datetime
 import time
+import logging
 
 try:
     import requests
@@ -17,11 +18,11 @@ ALERT_INDEX = 1
 API_KEY_INDEX = 2
 BASE_URL_INDEX = 3
 
-# Hardcoded secret (consider moving this to a config or environment variable)
 HARDCODED_API_SECRET = "a01150b70f1482f1ac3bab6513e7e5f329c43e723c580eac003d05f8762895e7"
 
-# Log file path
+# Logging
 LOG_FILE = "/var/ossec/logs/casebender_integration.log"
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='[%(asctime)s] %(message)s')
 
 def main(args):
     if len(args) < 4:
@@ -54,90 +55,86 @@ def load_alert(filepath):
         with open(filepath, 'r') as f:
             return json.load(f)
     except Exception as e:
-        print(f"Error reading alert file: {e}")
+        logging.error(f"Error reading alert file: {e}")
         sys.exit(3)
+
+def get_field(obj, path, default="unknown"):
+    for part in path.split('.'):
+        if isinstance(obj, dict):
+            obj = obj.get(part, default)
+        else:
+            return default
+    return obj if obj is not None else default
 
 def get_severity(alert):
     try:
-        level = int(alert.get('rule', {}).get('level', 0))
+        level = int(get_field(alert, 'rule.level', 0))
     except (ValueError, TypeError):
         level = 0
 
     if level <= 4:
-        return 1  # Low
+        return 1
     elif 5 <= level <= 9:
-        return 2  # Medium
+        return 2
     elif 10 <= level <= 14:
-        return 3  # High
+        return 3
     else:
-        return 4  # Critical
+        return 4
 
 def build_description(alert):
-    rule = alert.get('rule', {})
-    agent = alert.get('agent', {})
+    description_lines = []
 
-    level = rule.get('level', 'unknown')
-    agent_name = agent.get('name', 'unknown')
-    agent_ip = agent.get('ip', 'unknown')
-    agent_id = agent.get('id', 'unknown')
-    timestamp = alert.get('timestamp', 'unknown')
-    rule_id = rule.get('id', 'unknown')
-    rule_description = rule.get('description', 'No description available')
-    groups = ", ".join(rule.get('groups', [])) if rule.get('groups') else "unknown"
-    full_log = alert.get('full_log', 'No full_log available.')
+    def safe_line(label, value):
+        return f"- **{label}**: {value if value is not None else 'unknown'}"
 
-    agent_info = f"""Agent Information:
-- **Name**: {agent_name}
-- **IP**: {agent_ip}
-- **ID**: {agent_id}
-"""
+    description_lines.append("**Agent Information:**")
+    description_lines.append(safe_line("Name", get_field(alert, "agent.name")))
+    description_lines.append(safe_line("IP", get_field(alert, "agent.ip")))
+    description_lines.append(safe_line("ID", get_field(alert, "agent.id")))
 
-    alert_metadata = f"""Alert Metadata:
-- **Rule ID**: {rule_id}
-- **Rule Description**: {rule_description}
-- **Severity Level**: {level}
-- **Timestamp**: {timestamp}
-- **Groups**: {groups}
-"""
+    description_lines.append("\n**Alert Metadata:**")
+    description_lines.append(safe_line("Rule ID", get_field(alert, "rule.id")))
+    description_lines.append(safe_line("Description", get_field(alert, "rule.description")))
+    description_lines.append(safe_line("Severity", get_field(alert, "rule.level")))
+    description_lines.append(safe_line("Timestamp", get_field(alert, "timestamp")))
+    groups = get_field(alert, "rule.groups", [])
+    description_lines.append(safe_line("Groups", ", ".join(groups) if isinstance(groups, list) else groups))
 
-    data_info = "**Data**:\n"
-    try:
-        win_data = alert.get('data', {}).get('win', {})
-        if not win_data:
-            data_info += "- No 'win' section found under 'data'\n"
-        else:
-            system_data = win_data.get('system', {})
-            eventdata = win_data.get('eventdata', {})
+    description_lines.append("\n**Full Log:**")
+    description_lines.append(get_field(alert, "full_log", "No full_log available."))
 
-            if system_data:
-                data_info += "\n  System Information:\n"
-                for key, value in sorted(system_data.items()):
-                    data_info += f"    - {key}: {value}\n"
+    # Add dynamic additional fields
+    standard_keys = {
+        "agent", "rule", "full_log", "timestamp", "manager", "decoder", "location", "syscheck", "@timestamp"
+    }
+
+    def flatten(d, parent_key='', sep='.'):
+        items = []
+        for k, v in d.items():
+            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+            if isinstance(v, dict):
+                items.extend(flatten(v, new_key, sep=sep))
             else:
-                data_info += "  - No system information available.\n"
+                items.append((new_key, v))
+        return items
 
-            if eventdata:
-                data_info += "\n  Event Data:\n"
-                for key, value in sorted(eventdata.items()):
-                    data_info += f"    - {key}: {value}\n"
-            else:
-                data_info += "  - No event data available.\n"
+    additional_data = flatten(alert)
+    additional_data_filtered = [(k, v) for k, v in additional_data if k.split('.')[0] not in standard_keys]
 
-    except Exception as e:
-        data_info += f"- Failed to parse 'data' field: {e}\n"
+    if additional_data_filtered:
+        description_lines.append("\n**Additional Data:**")
+        for key, value in additional_data_filtered:
+            if isinstance(value, (str, int, float, bool)):
+                description_lines.append(safe_line(key, value))
 
-    full_log_info = f"""
-**Full Log**:
-{full_log}
-"""
-    return f"{agent_info}\n{alert_metadata}\n{data_info}\n{full_log_info}"
+    return "\n".join(description_lines)
 
 def generate_case_payload(alert):
     severity = get_severity(alert)
-    rule_description = alert.get('rule', {}).get('description', 'No description available')
+    title = get_field(alert, "rule.description", "Wazuh Alert")
 
     return {
-        "title": rule_description or 'Wazuh Alert',
+        "title": title,
         "description": build_description(alert),
         "severity": severity,
         "statusValue": "new",
@@ -147,12 +144,12 @@ def generate_case_payload(alert):
 
 def generate_alert_payload(alert):
     severity = get_severity(alert)
-    rule_description = alert.get('rule', {}).get('description', 'No description available')
+    title = get_field(alert, "rule.description", "Wazuh Alert")
 
     return {
-        "description": "tlp",
+        "description": build_description(alert),
         "count": 1,
-        "title": rule_description or "Wazuh Alert",
+        "title": title,
         "statusValue": "new",
         "severity": severity,
         "tlp": severity
@@ -168,39 +165,33 @@ def send_to_casebender(url, api_key, api_secret, payload, max_retries=3):
     for attempt in range(1, max_retries + 1):
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=10)
-            print(f"[Attempt {attempt}] Sent to {url}")
-            print(f"Status: {response.status_code} | Response: {response.text}")
+            logging.info(f"[Attempt {attempt}] Sent to {url}")
+            logging.info(f"Status: {response.status_code} | Response: {response.text}")
 
             if response.status_code in (200, 201):
-                return True  # Success
+                return True
             elif 500 <= response.status_code < 600:
-                print("Server error, will retry...")
+                logging.warning("Server error, retrying...")
             else:
-                print("Client error or unexpected response, not retrying.")
+                logging.error("Client error or unexpected response, not retrying.")
                 return False
         except requests.RequestException as e:
-            print(f"Request failed: {e}. Retrying...")
+            logging.error(f"Request failed: {e}. Retrying...")
 
-        time.sleep(2 ** attempt)  # Exponential backoff: 2s, 4s, 8s
+        time.sleep(2 ** attempt)
 
-    print("Max retries reached. Giving up.")
+    logging.error("Max retries reached. Giving up.")
     return False
 
 def log_action(alert, action_type, success):
     timestamp = datetime.datetime.utcnow().isoformat()
-    rule = alert.get('rule', {})
-    rule_id = rule.get('id', 'unknown')
-    level = rule.get('level', 'unknown')
-    title = rule.get('description', 'No title')
+    rule_id = get_field(alert, "rule.id", "unknown")
+    level = get_field(alert, "rule.level", "unknown")
+    title = get_field(alert, "rule.description", "No title")
     status = "SUCCESS" if success else "FAILED"
 
-    log_entry = f"[{timestamp}] {status} sending {action_type.upper()} | Rule ID: {rule_id} | Level: {level} | Title: {title}\n"
-
-    try:
-        with open(LOG_FILE, 'a') as f:
-            f.write(log_entry)
-    except Exception as e:
-        print(f"Error writing log: {e}")
+    log_entry = f"{status} sending {action_type.upper()} | Rule ID: {rule_id} | Level: {level} | Title: {title}"
+    logging.info(log_entry)
 
 if __name__ == "__main__":
     main(sys.argv)
