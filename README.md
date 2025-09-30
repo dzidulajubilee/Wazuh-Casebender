@@ -33,9 +33,9 @@ git clone https://github.com/dzidulajubilee/Wazuh-Casebender.git
 
 ```
 
-cp  custom-casebender/var/ossec/integrations/
+cp custom-casebender /var/ossec/integrations/
 
-cp  custom-casebender.py/var/ossec/integrations/
+cp custom-casebender.py /var/ossec/integrations/
 
 nano custom-casebender.py
 
