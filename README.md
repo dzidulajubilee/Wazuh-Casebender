@@ -8,9 +8,10 @@ Tested on Casebender and Wazuh 4.11.2 (Ubuntu 22.04)
 Build your casebender Box Refer to the official Documentation of Casebender
 ```
 https://docs.casebender.com/en/quickstart
+```
 
 Generate API for Super User
-```
+
 ![image](https://github.com/user-attachments/assets/ffa85c2d-b14e-4672-9859-882c9cd9da25)
 
 
