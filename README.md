@@ -65,7 +65,7 @@ Place Below the Global Tag
 <!-- Custom external Integration -->
    <integration>
     <name>custom-casebender</name>
-    <hook_url>http://192.168.28.101:3000/api/alerts</hook_url> <!-- Actually your API URL -->
+    <hook_url>http://192.168.28.101:3000</hook_url> <!-- Actually your API URL -->
     <api_key>PUT YOUR API KEY HERE</api_key> <!-- Your API key -->
     <level>0</level>
     <alert_format>json</alert_format>
