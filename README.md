@@ -13,15 +13,15 @@ Generate API for Super User
 ```
 ![image](https://github.com/user-attachments/assets/ffa85c2d-b14e-4672-9859-882c9cd9da25)
 
-```
+
 
 Copy your API Key and API Secret and Store Safe
 
-```
+
 
 # STEP 2 
 
-On your Wazuh Server, Clone this repo on your wazuh server
+Clone this repo on your wazuh server
 
 ```
 git clone https://github.com/dzidulajubilee/Wazuh-Casebender.git
@@ -46,7 +46,7 @@ Replace the section HARDCODED_API_SECRET with your API secret and save the file
 # Step 4 - Configure Permission and Ownership 
 
 ```
-chmod 755 /var/ossec/integrations/custom-casebdner
+chmod 755 /var/ossec/integrations/custom-casebender
 chmod 755 /var/ossec/integrations/custom-casebender.py
 
 chown root:wazuh /var/ossec/integrations/custom-casebender
